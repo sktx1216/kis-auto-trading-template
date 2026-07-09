@@ -1,0 +1,129 @@
+import os
+
+from dotenv import load_dotenv
+
+load_dotenv()
+
+
+def env_bool(name: str, default: bool) -> bool:
+    raw_value = os.getenv(name)
+    if raw_value is None or raw_value.strip() == "":
+        return default
+
+    value = raw_value.strip().lower()
+    if value in {"true", "1", "yes", "y", "on"}:
+        return True
+    if value in {"false", "0", "no", "n", "off"}:
+        return False
+
+    raise ValueError(
+        f"{name} must be a boolean value such as true or false, got {raw_value!r}"
+    )
+
+
+def env_optional_float(name: str):
+    raw_value = os.getenv(name)
+    if raw_value is None or raw_value.strip() == "":
+        return None
+    return float(raw_value)
+
+
+def env_csv_set(name: str, default: str = ""):
+    raw_value = os.getenv(name, default)
+    return {
+        item.strip().upper()
+        for item in raw_value.split(",")
+        if item.strip()
+    }
+
+
+APP_KEY = os.getenv("KIS_APP_KEY", "")
+APP_SECRET = os.getenv("KIS_APP_SECRET", "")
+CANO = os.getenv("KIS_CANO", "")
+ACNT_PRDT_CD = os.getenv("KIS_ACNT_PRDT_CD", "")
+BASE_URL = os.getenv("KIS_BASE_URL", "https://openapi.koreainvestment.com:9443")
+
+MAX_POSITIONS = int(os.getenv("MAX_POSITIONS", "10"))
+TARGET_POSITION_RATIO = float(os.getenv("TARGET_POSITION_RATIO", "0.095"))
+MAX_POSITION_RATIO = float(os.getenv("MAX_POSITION_RATIO", "0.12"))
+CASH_BUFFER_RATIO = float(os.getenv("CASH_BUFFER_RATIO", "0.05"))
+SMALL_ACCOUNT_THRESHOLD_USD = float(os.getenv("SMALL_ACCOUNT_THRESHOLD_USD", "2000"))
+SMALL_ACCOUNT_MAX_POSITIONS = int(os.getenv("SMALL_ACCOUNT_MAX_POSITIONS", "3"))
+SMALL_ACCOUNT_TARGET_POSITION_RATIO = float(os.getenv("SMALL_ACCOUNT_TARGET_POSITION_RATIO", "0.30"))
+SMALL_ACCOUNT_MAX_POSITION_RATIO = float(os.getenv("SMALL_ACCOUNT_MAX_POSITION_RATIO", "0.45"))
+SMALL_ACCOUNT_MAX_FIRST_SHARE_CASH_RATIO = float(os.getenv("SMALL_ACCOUNT_MAX_FIRST_SHARE_CASH_RATIO", "0.90"))
+MAX_BUY_PER_DAY_STRONG = int(os.getenv("MAX_BUY_PER_DAY_STRONG", "2"))
+MAX_BUY_PER_DAY_NORMAL = int(os.getenv("MAX_BUY_PER_DAY_NORMAL", "1"))
+MAX_BUY_PER_DAY_WEAK = int(os.getenv("MAX_BUY_PER_DAY_WEAK", "0"))
+ALLOW_WEAK_MARKET_RELATIVE_STRENGTH_BUY = env_bool("ALLOW_WEAK_MARKET_RELATIVE_STRENGTH_BUY", True)
+MAX_BUY_PER_DAY_WEAK_RELATIVE_STRENGTH = int(os.getenv("MAX_BUY_PER_DAY_WEAK_RELATIVE_STRENGTH", "1"))
+MIN_WEAK_MARKET_RELATIVE_STRENGTH_SCORE = int(os.getenv("MIN_WEAK_MARKET_RELATIVE_STRENGTH_SCORE", "85"))
+MIN_RELATIVE_STRENGTH_EDGE_PERCENT = float(os.getenv("MIN_RELATIVE_STRENGTH_EDGE_PERCENT", "2.0"))
+REQUIRE_WEAK_MARKET_RELATIVE_STRENGTH = env_bool("REQUIRE_WEAK_MARKET_RELATIVE_STRENGTH", False)
+MAX_DAILY_LOSS_RATE = float(os.getenv("MAX_DAILY_LOSS_RATE", "-3.0"))
+MIN_ORDER_AMOUNT_USD = float(os.getenv("MIN_ORDER_AMOUNT_USD", "50"))
+SIZING_TOTAL_ASSET_USD = env_optional_float("SIZING_TOTAL_ASSET_USD")
+DRY_RUN = env_bool("DRY_RUN", True)
+PUSH_PORTFOLIO_ON_DRY_RUN = env_bool("PUSH_PORTFOLIO_ON_DRY_RUN", False)
+PUSH_PORTFOLIO_EVERY_RUN = env_bool("PUSH_PORTFOLIO_EVERY_RUN", True)
+MARKET_HOURS_GUARD = env_bool("MARKET_HOURS_GUARD", True)
+ENABLE_QQQ_FALLBACK = env_bool("ENABLE_QQQ_FALLBACK", True)
+PREVENT_BUY_AFTER_SELL_TODAY = env_bool("PREVENT_BUY_AFTER_SELL_TODAY", True)
+BUY_LIMIT_PRICE_BUFFER = float(os.getenv("BUY_LIMIT_PRICE_BUFFER", "0.001"))
+SELL_LIMIT_PRICE_BUFFER = float(os.getenv("SELL_LIMIT_PRICE_BUFFER", "0.001"))
+ORDER_CONFIRM_WAIT_SECONDS = int(os.getenv("ORDER_CONFIRM_WAIT_SECONDS", "15"))
+ORDER_CONFIRM_RETRIES = int(os.getenv("ORDER_CONFIRM_RETRIES", "2"))
+COOLDOWN_DAYS = {
+    "TAKE_PROFIT_HALF_10": int(os.getenv("COOLDOWN_TAKE_PROFIT_HALF_10", "1")),
+    "TAKE_PROFIT_FULL_20": int(os.getenv("COOLDOWN_TAKE_PROFIT_FULL_20", "3")),
+    "PROFIT_MA20_BREAK": int(os.getenv("COOLDOWN_PROFIT_MA20_BREAK", "2")),
+    "STOP_LOSS": int(os.getenv("COOLDOWN_STOP_LOSS", "5")),
+    "STALE_POSITION": int(os.getenv("COOLDOWN_STALE_POSITION", "2")),
+    "EARLY_DRAWDOWN": int(os.getenv("COOLDOWN_EARLY_DRAWDOWN", "3")),
+}
+TOKEN_EXPIRY_BUFFER_MINUTES = int(os.getenv("TOKEN_EXPIRY_BUFFER_MINUTES", "30"))
+TOKEN_STATE_PATH = os.getenv("TOKEN_STATE_PATH", "token_state.json")
+
+MIN_AVG_TRADE_VALUE_20 = float(os.getenv("MIN_AVG_TRADE_VALUE_20", "1000000000"))
+MAX_RECENT_20D_RETURN_PERCENT = float(os.getenv("MAX_RECENT_20D_RETURN_PERCENT", "25"))
+MAX_52W_HIGH_POSITION_PERCENT = float(os.getenv("MAX_52W_HIGH_POSITION_PERCENT", "98"))
+MAX_BUY_VOLATILITY_20_PERCENT = float(os.getenv("MAX_BUY_VOLATILITY_20_PERCENT", "6.5"))
+MIN_BUY_TODAY_RETURN_PERCENT = float(os.getenv("MIN_BUY_TODAY_RETURN_PERCENT", "-1"))
+MAX_BUY_TODAY_RETURN_PERCENT = float(os.getenv("MAX_BUY_TODAY_RETURN_PERCENT", "4"))
+MAX_BUY_GAP_PERCENT = float(os.getenv("MAX_BUY_GAP_PERCENT", "4"))
+MAX_BUY_GAP_DOWN_PERCENT = float(os.getenv("MAX_BUY_GAP_DOWN_PERCENT", "2.5"))
+MAX_BUY_INTRADAY_RANGE_PERCENT = float(os.getenv("MAX_BUY_INTRADAY_RANGE_PERCENT", "6"))
+MIN_BUY_PREVIOUS_DAY_RETURN_PERCENT = float(os.getenv("MIN_BUY_PREVIOUS_DAY_RETURN_PERCENT", "-3.0"))
+MIN_BUY_RECENT_3D_RETURN_PERCENT = float(os.getenv("MIN_BUY_RECENT_3D_RETURN_PERCENT", "-4.0"))
+MAX_BUY_VOLUME_SPIKE_RATIO = float(os.getenv("MAX_BUY_VOLUME_SPIKE_RATIO", "2.5"))
+BUY_RELATIVE_STRENGTH_BONUS = int(os.getenv("BUY_RELATIVE_STRENGTH_BONUS", "10"))
+BUY_RELATIVE_STRENGTH_PENALTY = int(os.getenv("BUY_RELATIVE_STRENGTH_PENALTY", "10"))
+REQUIRE_BUY_RELATIVE_STRENGTH = env_bool("REQUIRE_BUY_RELATIVE_STRENGTH", False)
+MANUAL_BLOCK_LIST = env_csv_set("MANUAL_BLOCK_LIST", "HON")
+CYCLICAL_TRAVEL_RISK_MODE = env_bool("CYCLICAL_TRAVEL_RISK_MODE", True)
+CYCLICAL_TRAVEL_RISK_SYMBOLS = env_csv_set("CYCLICAL_TRAVEL_RISK_SYMBOLS", "BKNG,ABNB,MAR")
+CYCLICAL_TRAVEL_RISK_PENALTY = int(os.getenv("CYCLICAL_TRAVEL_RISK_PENALTY", "10"))
+PROFIT_MA20_BREAK_HOLD_BAND_PERCENT = float(os.getenv("PROFIT_MA20_BREAK_HOLD_BAND_PERCENT", "1.0"))
+STALE_POSITION_DAYS = int(os.getenv("STALE_POSITION_DAYS", "15"))
+STALE_POSITION_MIN_PROFIT_RATE = float(os.getenv("STALE_POSITION_MIN_PROFIT_RATE", "5.0"))
+EARLY_DRAWDOWN_EXIT_DAYS = int(os.getenv("EARLY_DRAWDOWN_EXIT_DAYS", "3"))
+EARLY_DRAWDOWN_EXIT_RATE = float(os.getenv("EARLY_DRAWDOWN_EXIT_RATE", "-4.5"))
+REENTRY_MIN_SCORE_AFTER_STALE_POSITION = int(os.getenv("REENTRY_MIN_SCORE_AFTER_STALE_POSITION", "90"))
+REENTRY_MIN_SCORE_AFTER_STOP_LOSS = int(os.getenv("REENTRY_MIN_SCORE_AFTER_STOP_LOSS", "95"))
+REENTRY_MIN_SCORE_AFTER_PROFIT_MA20_BREAK = int(os.getenv("REENTRY_MIN_SCORE_AFTER_PROFIT_MA20_BREAK", "90"))
+KIS_API_MAX_RETRIES = int(os.getenv("KIS_API_MAX_RETRIES", "1"))
+KIS_API_RETRY_DELAY_SECONDS = int(os.getenv("KIS_API_RETRY_DELAY_SECONDS", "120"))
+KIS_API_TIMEOUT_SECONDS = int(os.getenv("KIS_API_TIMEOUT_SECONDS", "30"))
+KIS_QUOTE_MAX_RETRIES = int(os.getenv("KIS_QUOTE_MAX_RETRIES", "0"))
+KIS_QUOTE_RETRY_DELAY_SECONDS = int(os.getenv("KIS_QUOTE_RETRY_DELAY_SECONDS", "0"))
+KIS_QUOTE_TIMEOUT_SECONDS = int(os.getenv("KIS_QUOTE_TIMEOUT_SECONDS", "8"))
+
+PORTFOLIO_DATA_REPO_URL = os.getenv(
+    "PORTFOLIO_DATA_REPO_URL",
+    "https://github.com/YOUR_GITHUB_ID/kis-portfolio-data.git",
+)
+PORTFOLIO_DATA_DIR = os.getenv("PORTFOLIO_DATA_DIR", r"./portfolio-data")
+DASHBOARD_INITIAL_CAPITAL_KRW = float(os.getenv("DASHBOARD_INITIAL_CAPITAL_KRW", "1000000"))
+DASHBOARD_INITIAL_CAPITAL_DATE = os.getenv("DASHBOARD_INITIAL_CAPITAL_DATE", "2026-06-30")
+DASHBOARD_INITIAL_CAPITAL_NOTE = os.getenv("DASHBOARD_INITIAL_CAPITAL_NOTE", "initial deposit")
+DASHBOARD_CASH_FLOWS_JSON = os.getenv("DASHBOARD_CASH_FLOWS_JSON", "")

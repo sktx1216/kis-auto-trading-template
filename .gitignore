@@ -1,0 +1,8 @@
+.env
+__pycache__/
+*.pyc
+logs/
+state.json
+token_state.json
+portfolio-data/
+.portfolio-auth-test

@@ -1,0 +1,303 @@
+name: KIS Auto Trader
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Run mode"
+        required: true
+        default: "sell-only"
+        type: choice
+        options:
+          - diagnose
+          - account-diagnose
+          - token-test
+          - portfolio-auth-test
+          - strategy-test
+          - unit-test
+          - paper-order-test
+          - sell-only
+          - cancel-open-orders
+          - portfolio-snapshot
+          - score-only
+          - full
+
+jobs:
+  decide-mode:
+    runs-on: ubuntu-latest
+    outputs:
+      mode: ${{ steps.mode.outputs.mode }}
+      should_run: ${{ steps.mode.outputs.should_run }}
+      skip_reason: ${{ steps.mode.outputs.skip_reason }}
+    steps:
+      - id: mode
+        shell: bash
+        run: |
+          should_run=true
+          skip_reason=""
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            mode="${{ inputs.mode }}"
+          elif [ "${{ github.event.schedule }}" = "17 15 * * 1-5" ]; then
+            mode="full"
+          else
+            mode="sell-only"
+          fi
+
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            ny_hm=$(TZ=America/New_York date '+%H%M')
+            ny_minute=$(TZ=America/New_York date '+%M')
+
+            if [ "$mode" = "full" ]; then
+              if [ "$ny_hm" -lt 1105 ] || [ "$ny_hm" -gt 1135 ]; then
+                should_run=false
+                skip_reason="scheduled full run is stale or outside the 11:05-11:35 New York window"
+              fi
+            else
+              if [ "$ny_hm" -lt 0930 ] || [ "$ny_hm" -ge 1600 ]; then
+                should_run=false
+                skip_reason="scheduled sell-only run is outside US regular market hours"
+              elif [ "$ny_minute" -lt 25 ] || [ "$ny_minute" -gt 55 ]; then
+                should_run=false
+                skip_reason="scheduled sell-only run is stale; expected near minute 35"
+              fi
+            fi
+          fi
+
+          echo "mode=$mode" >> "$GITHUB_OUTPUT"
+          echo "should_run=$should_run" >> "$GITHUB_OUTPUT"
+          echo "skip_reason=$skip_reason" >> "$GITHUB_OUTPUT"
+
+  trade:
+    needs: decide-mode
+    if: needs.decide-mode.outputs.should_run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    concurrency:
+      group: kis-auto-trader
+      cancel-in-progress: false
+    env:
+      KIS_APP_KEY: ${{ secrets.KIS_APP_KEY }}
+      KIS_APP_SECRET: ${{ secrets.KIS_APP_SECRET }}
+      KIS_CANO: ${{ secrets.KIS_CANO }}
+      KIS_ACNT_PRDT_CD: ${{ secrets.KIS_ACNT_PRDT_CD }}
+      KIS_BASE_URL: ${{ secrets.KIS_BASE_URL }}
+      DRY_RUN: ${{ secrets.DRY_RUN || vars.DRY_RUN || 'true' }}
+      MAX_POSITIONS: ${{ vars.MAX_POSITIONS || '10' }}
+      TARGET_POSITION_RATIO: ${{ vars.TARGET_POSITION_RATIO || '0.095' }}
+      MAX_POSITION_RATIO: ${{ vars.MAX_POSITION_RATIO || '0.12' }}
+      CASH_BUFFER_RATIO: ${{ vars.CASH_BUFFER_RATIO || '0.05' }}
+      SMALL_ACCOUNT_THRESHOLD_USD: ${{ vars.SMALL_ACCOUNT_THRESHOLD_USD || '2000' }}
+      SMALL_ACCOUNT_MAX_POSITIONS: ${{ vars.SMALL_ACCOUNT_MAX_POSITIONS || '3' }}
+      SMALL_ACCOUNT_TARGET_POSITION_RATIO: ${{ vars.SMALL_ACCOUNT_TARGET_POSITION_RATIO || '0.30' }}
+      SMALL_ACCOUNT_MAX_POSITION_RATIO: ${{ vars.SMALL_ACCOUNT_MAX_POSITION_RATIO || '0.45' }}
+      SMALL_ACCOUNT_MAX_FIRST_SHARE_CASH_RATIO: ${{ vars.SMALL_ACCOUNT_MAX_FIRST_SHARE_CASH_RATIO || '0.90' }}
+      MAX_BUY_PER_DAY_STRONG: ${{ vars.MAX_BUY_PER_DAY_STRONG || '2' }}
+      MAX_BUY_PER_DAY_NORMAL: ${{ vars.MAX_BUY_PER_DAY_NORMAL || '1' }}
+      MAX_BUY_PER_DAY_WEAK: ${{ vars.MAX_BUY_PER_DAY_WEAK || '0' }}
+      ALLOW_WEAK_MARKET_RELATIVE_STRENGTH_BUY: ${{ vars.ALLOW_WEAK_MARKET_RELATIVE_STRENGTH_BUY || 'true' }}
+      MAX_BUY_PER_DAY_WEAK_RELATIVE_STRENGTH: ${{ vars.MAX_BUY_PER_DAY_WEAK_RELATIVE_STRENGTH || '1' }}
+      MIN_WEAK_MARKET_RELATIVE_STRENGTH_SCORE: ${{ vars.MIN_WEAK_MARKET_RELATIVE_STRENGTH_SCORE || '85' }}
+      MIN_RELATIVE_STRENGTH_EDGE_PERCENT: ${{ vars.MIN_RELATIVE_STRENGTH_EDGE_PERCENT || '2.0' }}
+      REQUIRE_WEAK_MARKET_RELATIVE_STRENGTH: ${{ vars.REQUIRE_WEAK_MARKET_RELATIVE_STRENGTH || 'false' }}
+      MAX_DAILY_LOSS_RATE: ${{ vars.MAX_DAILY_LOSS_RATE || '-3.0' }}
+      MIN_ORDER_AMOUNT_USD: ${{ vars.MIN_ORDER_AMOUNT_USD || '50' }}
+      SIZING_TOTAL_ASSET_USD: ${{ vars.SIZING_TOTAL_ASSET_USD || '' }}
+      MAX_RECENT_20D_RETURN_PERCENT: ${{ vars.MAX_RECENT_20D_RETURN_PERCENT || '25' }}
+      MAX_52W_HIGH_POSITION_PERCENT: ${{ vars.MAX_52W_HIGH_POSITION_PERCENT || '98' }}
+      MAX_BUY_VOLATILITY_20_PERCENT: ${{ vars.MAX_BUY_VOLATILITY_20_PERCENT || '6.5' }}
+      MIN_BUY_TODAY_RETURN_PERCENT: ${{ vars.MIN_BUY_TODAY_RETURN_PERCENT || '-1' }}
+      MAX_BUY_TODAY_RETURN_PERCENT: ${{ vars.MAX_BUY_TODAY_RETURN_PERCENT || '4' }}
+      MAX_BUY_GAP_PERCENT: ${{ vars.MAX_BUY_GAP_PERCENT || '4' }}
+      MAX_BUY_GAP_DOWN_PERCENT: ${{ vars.MAX_BUY_GAP_DOWN_PERCENT || '2.5' }}
+      MAX_BUY_INTRADAY_RANGE_PERCENT: ${{ vars.MAX_BUY_INTRADAY_RANGE_PERCENT || '6' }}
+      MIN_BUY_PREVIOUS_DAY_RETURN_PERCENT: ${{ vars.MIN_BUY_PREVIOUS_DAY_RETURN_PERCENT || '-3.0' }}
+      MIN_BUY_RECENT_3D_RETURN_PERCENT: ${{ vars.MIN_BUY_RECENT_3D_RETURN_PERCENT || '-4.0' }}
+      MAX_BUY_VOLUME_SPIKE_RATIO: ${{ vars.MAX_BUY_VOLUME_SPIKE_RATIO || '2.5' }}
+      BUY_RELATIVE_STRENGTH_BONUS: ${{ vars.BUY_RELATIVE_STRENGTH_BONUS || '10' }}
+      BUY_RELATIVE_STRENGTH_PENALTY: ${{ vars.BUY_RELATIVE_STRENGTH_PENALTY || '10' }}
+      REQUIRE_BUY_RELATIVE_STRENGTH: ${{ vars.REQUIRE_BUY_RELATIVE_STRENGTH || 'false' }}
+      MANUAL_BLOCK_LIST: ${{ vars.MANUAL_BLOCK_LIST || 'HON' }}
+      CYCLICAL_TRAVEL_RISK_MODE: ${{ vars.CYCLICAL_TRAVEL_RISK_MODE || 'true' }}
+      CYCLICAL_TRAVEL_RISK_SYMBOLS: ${{ vars.CYCLICAL_TRAVEL_RISK_SYMBOLS || 'BKNG,ABNB,MAR' }}
+      CYCLICAL_TRAVEL_RISK_PENALTY: ${{ vars.CYCLICAL_TRAVEL_RISK_PENALTY || '10' }}
+      STALE_POSITION_DAYS: ${{ vars.STALE_POSITION_DAYS || '15' }}
+      STALE_POSITION_MIN_PROFIT_RATE: ${{ vars.STALE_POSITION_MIN_PROFIT_RATE || '5.0' }}
+      REENTRY_MIN_SCORE_AFTER_STALE_POSITION: ${{ vars.REENTRY_MIN_SCORE_AFTER_STALE_POSITION || '90' }}
+      REENTRY_MIN_SCORE_AFTER_STOP_LOSS: ${{ vars.REENTRY_MIN_SCORE_AFTER_STOP_LOSS || '95' }}
+      REENTRY_MIN_SCORE_AFTER_PROFIT_MA20_BREAK: ${{ vars.REENTRY_MIN_SCORE_AFTER_PROFIT_MA20_BREAK || '90' }}
+      PUSH_PORTFOLIO_EVERY_RUN: ${{ vars.PUSH_PORTFOLIO_EVERY_RUN || 'true' }}
+      MARKET_HOURS_GUARD: ${{ vars.MARKET_HOURS_GUARD || 'true' }}
+      ENABLE_QQQ_FALLBACK: ${{ vars.ENABLE_QQQ_FALLBACK || 'true' }}
+      PREVENT_BUY_AFTER_SELL_TODAY: ${{ vars.PREVENT_BUY_AFTER_SELL_TODAY || 'true' }}
+      BUY_LIMIT_PRICE_BUFFER: ${{ vars.BUY_LIMIT_PRICE_BUFFER || '0.001' }}
+      SELL_LIMIT_PRICE_BUFFER: ${{ vars.SELL_LIMIT_PRICE_BUFFER || '0.001' }}
+      ORDER_CONFIRM_WAIT_SECONDS: ${{ vars.ORDER_CONFIRM_WAIT_SECONDS || '15' }}
+      ORDER_CONFIRM_RETRIES: ${{ vars.ORDER_CONFIRM_RETRIES || '2' }}
+      COOLDOWN_TAKE_PROFIT_HALF_10: ${{ vars.COOLDOWN_TAKE_PROFIT_HALF_10 || '1' }}
+      COOLDOWN_TAKE_PROFIT_FULL_20: ${{ vars.COOLDOWN_TAKE_PROFIT_FULL_20 || '3' }}
+      COOLDOWN_PROFIT_MA20_BREAK: ${{ vars.COOLDOWN_PROFIT_MA20_BREAK || '2' }}
+      COOLDOWN_STOP_LOSS: ${{ vars.COOLDOWN_STOP_LOSS || '5' }}
+      COOLDOWN_STALE_POSITION: ${{ vars.COOLDOWN_STALE_POSITION || '2' }}
+      COOLDOWN_EARLY_DRAWDOWN: ${{ vars.COOLDOWN_EARLY_DRAWDOWN || '3' }}
+      EARLY_DRAWDOWN_EXIT_DAYS: ${{ vars.EARLY_DRAWDOWN_EXIT_DAYS || '3' }}
+      EARLY_DRAWDOWN_EXIT_RATE: ${{ vars.EARLY_DRAWDOWN_EXIT_RATE || '-4.5' }}
+      TOKEN_EXPIRY_BUFFER_MINUTES: ${{ vars.TOKEN_EXPIRY_BUFFER_MINUTES || '30' }}
+      KIS_API_MAX_RETRIES: ${{ vars.KIS_API_MAX_RETRIES || '1' }}
+      KIS_API_RETRY_DELAY_SECONDS: ${{ vars.KIS_API_RETRY_DELAY_SECONDS || '120' }}
+      KIS_API_TIMEOUT_SECONDS: ${{ vars.KIS_API_TIMEOUT_SECONDS || '30' }}
+      KIS_QUOTE_MAX_RETRIES: ${{ vars.KIS_QUOTE_MAX_RETRIES || '0' }}
+      KIS_QUOTE_RETRY_DELAY_SECONDS: ${{ vars.KIS_QUOTE_RETRY_DELAY_SECONDS || '0' }}
+      KIS_QUOTE_TIMEOUT_SECONDS: ${{ vars.KIS_QUOTE_TIMEOUT_SECONDS || '8' }}
+      FULL_RUN_RETRY_ON_FAILURE: ${{ vars.FULL_RUN_RETRY_ON_FAILURE || 'true' }}
+      FULL_RUN_RETRY_DELAY_SECONDS: ${{ vars.FULL_RUN_RETRY_DELAY_SECONDS || '180' }}
+      PORTFOLIO_DATA_REPO_URL: ${{ secrets.PORTFOLIO_DATA_REPO_URL || vars.PORTFOLIO_DATA_REPO_URL || '' }}
+      PORTFOLIO_DATA_DIR: ${{ github.workspace }}/portfolio-data
+      DASHBOARD_CASH_FLOWS_JSON: ${{ vars.DASHBOARD_CASH_FLOWS_JSON || '' }}
+      TOKEN_STATE_PATH: token_state.json
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - name: Checkout trading repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Restore trader state
+        uses: actions/cache/restore@v4
+        with:
+          path: state.json
+          key: kis-trader-state-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            kis-trader-state-
+
+      - name: Restore KIS token
+        if: needs.decide-mode.outputs.mode != 'portfolio-auth-test' && needs.decide-mode.outputs.mode != 'unit-test'
+        uses: actions/cache/restore@v4
+        with:
+          path: token_state.json
+          key: kis-token-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            kis-token-
+
+      - name: Prepare KIS token
+        if: needs.decide-mode.outputs.mode != 'portfolio-auth-test' && needs.decide-mode.outputs.mode != 'unit-test'
+        run: python -u prepare_token.py
+
+      - name: Save KIS token
+        if: needs.decide-mode.outputs.mode != 'portfolio-auth-test' && needs.decide-mode.outputs.mode != 'unit-test'
+        uses: actions/cache/save@v4
+        with:
+          path: token_state.json
+          key: kis-token-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: Show workflow timing
+        run: |
+          echo "event_name=${{ github.event_name }}"
+          echo "event_schedule=${{ github.event.schedule }}"
+          echo "selected_mode=${{ needs.decide-mode.outputs.mode }}"
+          echo "utc_now=$(date -u '+%Y-%m-%d %H:%M:%S %Z')"
+          echo "kst_now=$(TZ=Asia/Seoul date '+%Y-%m-%d %H:%M:%S %Z')"
+          echo "ny_now=$(TZ=America/New_York date '+%Y-%m-%d %H:%M:%S %Z')"
+
+      - name: Token-only test
+        if: needs.decide-mode.outputs.mode == 'token-test'
+        run: |
+          echo "KIS token prepared successfully. No account balance lookup or orders were attempted."
+
+      - name: Account diagnostics
+        if: needs.decide-mode.outputs.mode == 'account-diagnose'
+        run: python -u account_diagnose.py
+
+      - name: Configure git identity
+        run: |
+          git config --global user.name "kis-auto-trader"
+          git config --global user.email "kis-auto-trader@users.noreply.github.com"
+
+      - name: Test portfolio push auth
+        if: needs.decide-mode.outputs.mode == 'portfolio-auth-test'
+        run: |
+          set -euo pipefail
+          rm -rf "$PORTFOLIO_DATA_DIR"
+          git clone "$PORTFOLIO_DATA_REPO_URL" "$PORTFOLIO_DATA_DIR"
+          cd "$PORTFOLIO_DATA_DIR"
+          test_file=".portfolio-auth-test"
+          echo "portfolio auth test at $(date -u '+%Y-%m-%dT%H:%M:%SZ')" > "$test_file"
+          git add "$test_file"
+          git commit -m "Test portfolio push auth"
+          git push --dry-run origin HEAD:portfolio-auth-test
+          echo "portfolio_auth_test=ok"
+
+      - name: Run strategy dry-run test
+        if: needs.decide-mode.outputs.mode == 'strategy-test'
+        env:
+          DRY_RUN: "true"
+          MARKET_HOURS_GUARD: "false"
+          PUSH_PORTFOLIO_EVERY_RUN: "false"
+          KIS_API_MAX_RETRIES: "0"
+          KIS_API_TIMEOUT_SECONDS: "10"
+        run: python -u auto_trader.py --mode full
+
+      - name: Run unit tests
+        if: needs.decide-mode.outputs.mode == 'unit-test'
+        run: python -m unittest discover -s tests
+
+      - name: Run paper order test
+        if: needs.decide-mode.outputs.mode == 'paper-order-test'
+        env:
+          DRY_RUN: "false"
+          MARKET_HOURS_GUARD: "true"
+          PUSH_PORTFOLIO_EVERY_RUN: "true"
+          KIS_API_MAX_RETRIES: "1"
+          KIS_API_TIMEOUT_SECONDS: "30"
+        run: |
+          set -euo pipefail
+          if [[ "$KIS_BASE_URL" != *"openapivts"* ]]; then
+            echo "paper-order-test is allowed only for KIS mock trading base URL."
+            exit 1
+          fi
+          python -u auto_trader.py --mode full
+
+      - name: Run trader
+        if: needs.decide-mode.outputs.mode != 'account-diagnose' && needs.decide-mode.outputs.mode != 'token-test' && needs.decide-mode.outputs.mode != 'portfolio-auth-test' && needs.decide-mode.outputs.mode != 'strategy-test' && needs.decide-mode.outputs.mode != 'unit-test' && needs.decide-mode.outputs.mode != 'paper-order-test'
+        run: |
+          set -euo pipefail
+          mode="${{ needs.decide-mode.outputs.mode }}"
+          if python -u auto_trader.py --mode "$mode"; then
+            exit 0
+          fi
+
+          if [ "$mode" = "full" ] && [ "$FULL_RUN_RETRY_ON_FAILURE" = "true" ]; then
+            echo "full run failed; retrying once in ${FULL_RUN_RETRY_DELAY_SECONDS}s"
+            sleep "$FULL_RUN_RETRY_DELAY_SECONDS"
+            python -u auto_trader.py --mode "$mode"
+          else
+            exit 1
+          fi
+
+      - name: Ensure state file exists
+        if: always()
+        run: |
+          if [ ! -f state.json ]; then
+            echo '{}' > state.json
+          fi
+
+      - name: Save trader state
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: state.json
+          key: kis-trader-state-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: Upload run logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kis-auto-trader-logs-${{ github.run_id }}
+          path: logs/
+          if-no-files-found: ignore
