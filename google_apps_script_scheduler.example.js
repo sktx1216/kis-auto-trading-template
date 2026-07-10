@@ -2,6 +2,7 @@ const GITHUB_OWNER = 'YOUR_GITHUB_ID';
 const GITHUB_REPO = 'kis-auto-trading-template';
 const WORKFLOW_FILE = 'auto-trader.yml';
 const REF = 'main';
+const MARKET_TIMEZONE = 'America/New_York';
 
 function runFull() {
   dispatchWorkflow_('full');
@@ -21,6 +22,64 @@ function runTradeFromCandidates() {
 
 function runDiagnose() {
   dispatchWorkflow_('diagnose');
+}
+
+function runCancelOpenOrders() {
+  dispatchWorkflow_('cancel-open-orders');
+}
+
+function runPortfolioSnapshot() {
+  dispatchWorkflow_('portfolio-snapshot');
+}
+
+function runAutoScheduler() {
+  const now = new Date();
+  const marketDate = Utilities.formatDate(now, MARKET_TIMEZONE, 'yyyy-MM-dd');
+  const marketDay = Utilities.formatDate(now, MARKET_TIMEZONE, 'EEE');
+  const hhmm = Number(Utilities.formatDate(now, MARKET_TIMEZONE, 'HHmm'));
+
+  if (marketDay === 'Sat' || marketDay === 'Sun') {
+    console.log(`No action: weekend in New York (${marketDate})`);
+    return;
+  }
+
+  if (hhmm >= 930 && hhmm < 1100) {
+    dispatchWorkflow_('sell-only');
+    return;
+  }
+
+  if (hhmm >= 1100 && hhmm < 1130) {
+    dispatchOncePerMarketDate_('scan-candidates', `scan-candidates-${marketDate}`);
+    return;
+  }
+
+  if (hhmm >= 1130 && hhmm < 1530) {
+    dispatchWorkflow_('trade-from-candidates');
+    return;
+  }
+
+  if (hhmm >= 1530 && hhmm < 1600) {
+    dispatchOncePerMarketDate_('cancel-open-orders', `cancel-open-orders-${marketDate}`);
+    return;
+  }
+
+  if (hhmm >= 1600 && hhmm < 1700) {
+    dispatchOncePerMarketDate_('portfolio-snapshot', `portfolio-snapshot-${marketDate}`);
+    return;
+  }
+
+  console.log(`No action at New York time ${marketDate} ${hhmm}`);
+}
+
+function dispatchOncePerMarketDate_(mode, key) {
+  const props = PropertiesService.getScriptProperties();
+  if (props.getProperty(key)) {
+    console.log(`Already dispatched ${mode}: ${key}`);
+    return;
+  }
+
+  dispatchWorkflow_(mode);
+  props.setProperty(key, new Date().toISOString());
 }
 
 function dispatchWorkflow_(mode) {
