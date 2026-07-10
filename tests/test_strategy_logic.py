@@ -1,6 +1,7 @@
 import json
 import os
 import unittest
+from datetime import datetime, timedelta, timezone
 
 os.environ["DRY_RUN"] = "true"
 os.environ["MARKET_HOURS_GUARD"] = "false"
@@ -308,6 +309,45 @@ class StrategyLogicTests(unittest.TestCase):
         self.assertEqual(result.reason, "already held")
         self.assertGreater(result.score, 0)
         self.assertIn("score_breakdown", result.metrics)
+
+    def test_candidate_pool_payload_stores_top_ranked_candidates(self):
+        original_top_n = auto_trader.config.CANDIDATE_POOL_TOP_N
+        try:
+            auto_trader.config.CANDIDATE_POOL_TOP_N = 2
+            results = [
+                scanner.ScanResult(symbol="AAPL", exchange="NASD", passed=True, score=105, reason="passed"),
+                scanner.ScanResult(symbol="MSFT", exchange="NASD", passed=True, score=100, reason="passed"),
+                scanner.ScanResult(symbol="NVDA", exchange="NASD", passed=True, score=95, reason="passed"),
+            ]
+
+            pool = auto_trader._candidate_pool_payload(
+                {"state": "strong", "allowed": True},
+                results,
+                results,
+            )
+
+            self.assertEqual(pool["data_type"], "candidate_pool")
+            self.assertEqual(pool["top_n"], 2)
+            self.assertEqual([item["symbol"] for item in pool["candidates"]], ["AAPL", "MSFT"])
+            self.assertEqual(pool["candidates"][0]["rank"], 1)
+        finally:
+            auto_trader.config.CANDIDATE_POOL_TOP_N = original_top_n
+
+    def test_candidate_pool_status_rejects_expired_pool(self):
+        original_ttl = auto_trader.config.CANDIDATE_POOL_TTL_MINUTES
+        try:
+            auto_trader.config.CANDIDATE_POOL_TTL_MINUTES = 30
+            pool = {
+                "updated_at": (datetime.now(timezone.utc) - timedelta(minutes=31)).isoformat(),
+                "candidates": [{"symbol": "AAPL"}],
+            }
+
+            status = auto_trader._candidate_pool_status(pool)
+
+            self.assertFalse(status["valid"])
+            self.assertIn("expired", status["reason"])
+        finally:
+            auto_trader.config.CANDIDATE_POOL_TTL_MINUTES = original_ttl
 
     def test_cyclical_travel_risk_lowers_score_without_blocking(self):
         item = {"symbol": "BKNG", "exchange": "NASD", "name": "Booking Holdings", "asset_type": "STOCK"}

@@ -11,6 +11,14 @@ function runSellOnly() {
   dispatchWorkflow_('sell-only');
 }
 
+function runScanCandidates() {
+  dispatchWorkflow_('scan-candidates');
+}
+
+function runTradeFromCandidates() {
+  dispatchWorkflow_('trade-from-candidates');
+}
+
 function runDiagnose() {
   dispatchWorkflow_('diagnose');
 }

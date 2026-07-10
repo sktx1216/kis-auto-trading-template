@@ -3,7 +3,7 @@ import csv
 import json
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import config
@@ -26,11 +26,15 @@ from market_hours import (
 )
 from portfolio_exporter import (
     export_portfolio_snapshot,
+    load_candidate_pool,
     load_trader_state,
+    push_candidate_pool,
     push_decision_log,
     push_trader_state,
 )
 from scanner import (
+    ScanResult,
+    evaluate_buy_candidate,
     check_market_filter,
     evaluate_qqq_fallback,
     evaluate_sell_decision,
@@ -54,7 +58,7 @@ def main(mode="full"):
         f"      market_day={market_hours['is_market_day']} "
         f"market_open={market_hours['is_open']} market_time={market_hours['market_time']}"
     )
-    if mode in {"full", "sell-only"} and not is_us_market_day():
+    if mode in {"full", "sell-only", "scan-candidates", "trade-from-candidates"} and not is_us_market_day():
         print("[SKIP] US market is closed today. No KIS API calls or orders will be attempted.")
         print("[DONE] market-closed run skipped")
         return
@@ -158,6 +162,43 @@ def main(mode="full"):
         print("[DONE] score-only run finished without buy/sell orders")
         return
 
+    if mode == "scan-candidates":
+        print("[3/9] Scan-candidates mode: skipping sell rules and order execution")
+        print("[4/9] Checking QQQ market filter...")
+        market = check_market_filter(client)
+        logs.append(_log_row("MARKET_FILTER", "QQQ", decision=market))
+        print(
+            f"[4/9] market_filter={market['allowed']} "
+            f"state={market['state']} qqq={market['current_price']} "
+            f"ma20={market['ma20']} ma60={market['ma60']} ({market['reason']})"
+        )
+        universe = load_nasdaq100_universe()
+        print(f"[6/9] Scanning NASDAQ100 universe for candidate pool: {len(universe)} symbols")
+        scan_results = scan_universe(client, universe, held_symbols)
+        passed_count = len([result for result in scan_results if result.passed])
+        print(f"[6/9] candidate scan complete: passed={passed_count}, rejected={len(scan_results) - passed_count}")
+        ranked_candidates = rank_candidates(scan_results)
+        for rank, result in enumerate(ranked_candidates, start=1):
+            logs.append(_log_row("SCORE_RANK", result.symbol, result=result, decision={"rank": rank}))
+        for result in scan_results:
+            logs.append(_log_row("SCAN", result.symbol, result=result))
+        pool = _candidate_pool_payload(market, ranked_candidates, scan_results)
+        _push_candidate_pool(pool)
+        logs.append(
+            _log_row(
+                "CANDIDATE_POOL",
+                "",
+                decision={
+                    "action": "SAVED",
+                    "reason": f"saved top {len(pool['candidates'])} candidates",
+                },
+            )
+        )
+        log_path = _write_logs(logs, push_decision_log_enabled=True)
+        print(f"[9/9] log saved: {log_path}")
+        print("[DONE] scan-candidates run finished without orders")
+        return
+
     print("[3/9] Checking sell rules for current positions...")
     for position in positions:
         decision = _handle_sell_decision(client, position, state)
@@ -188,6 +229,55 @@ def main(mode="full"):
     scan_results = []
     max_buy_count = _max_buy_count_for_market(market["state"])
     buy_allowed = market["allowed"] or _allow_weak_market_relative_strength_buy(market["state"])
+
+    if mode == "trade-from-candidates":
+        print("[5/9] Loading candidate pool...")
+        candidate_pool = load_candidate_pool()
+        pool_status = _candidate_pool_status(candidate_pool)
+        logs.append(_log_row("CANDIDATE_POOL", "", decision=pool_status))
+        if not pool_status["valid"]:
+            print(f"[5/9] Candidate pool unavailable: {pool_status['reason']}")
+            logs.append(_log_row("BUY_CHECK", "", decision={"action": "NO_BUY", "reason": pool_status["reason"]}))
+        elif buy_allowed and max_buy_count > 0 and _can_buy(positions, balance):
+            print(
+                f"[6/9] Revalidating candidate pool: "
+                f"{len(candidate_pool.get('candidates', []))} stored candidates"
+            )
+            scan_results = _revalidate_candidate_pool(client, candidate_pool, held_symbols, market)
+            ranked_candidates = rank_candidates(scan_results)
+            print(
+                f"[6/9] revalidation complete: passed={len(ranked_candidates)}, "
+                f"rejected={len(scan_results) - len(ranked_candidates)}"
+            )
+            buy_count = _run_buy_loop(
+                client,
+                ranked_candidates,
+                usd_cash,
+                total_asset_usd,
+                positions,
+                state,
+                market,
+                logs,
+                scan_results,
+                enable_fallback=False,
+            )
+        else:
+            if not buy_allowed:
+                reason = market["reason"]
+            elif max_buy_count <= 0:
+                reason = f"market state {market['state']} allows no new buys"
+            else:
+                reason = "position or daily-loss guard blocked buying"
+            print(f"[5/9] Buy blocked: {reason}")
+            logs.append(_log_row("BUY_CHECK", "", decision={"action": "NO_BUY", "reason": reason}))
+
+        for result in scan_results:
+            logs.append(_log_row("SCAN", result.symbol, result=result))
+        _save_state(positions, half_sold_symbols, state)
+        log_path = _write_logs(logs, push_decision_log_enabled=True)
+        print(f"[9/9] log saved: {log_path}")
+        print("[DONE] trade-from-candidates run finished")
+        return
 
     print("[5/9] Checking buy guards...")
     if buy_allowed and max_buy_count > 0 and _can_buy(positions, balance):
@@ -317,6 +407,8 @@ def parse_args():
             "full",
             "sell-only",
             "score-only",
+            "scan-candidates",
+            "trade-from-candidates",
             "diagnose",
             "cancel-open-orders",
             "portfolio-snapshot",
@@ -325,12 +417,254 @@ def parse_args():
         help=(
             "full runs sell checks and buy scan. sell-only only checks existing positions. "
             "score-only scans and writes decision_log.json without orders. "
+            "scan-candidates stores a top candidate pool without orders. "
+            "trade-from-candidates checks sells and buys from the stored candidate pool. "
             "cancel-open-orders cancels all overseas open orders. "
             "portfolio-snapshot updates portfolio JSON files without orders. "
             "diagnose checks config, token, balance, market filter, and snapshot export without orders."
         ),
     )
     return parser.parse_args()
+
+
+def _candidate_pool_payload(market, ranked_candidates, scan_results):
+    now = datetime.now(timezone.utc)
+    expires_at = now + timedelta(minutes=config.CANDIDATE_POOL_TTL_MINUTES)
+    top_candidates = ranked_candidates[: config.CANDIDATE_POOL_TOP_N]
+    return {
+        "data_type": "candidate_pool",
+        "schema_version": 1,
+        "updated_at": now.isoformat(),
+        "expires_at": expires_at.isoformat(),
+        "ttl_minutes": config.CANDIDATE_POOL_TTL_MINUTES,
+        "universe": "NASDAQ100",
+        "universe_count": len(scan_results),
+        "top_n": config.CANDIDATE_POOL_TOP_N,
+        "market": market,
+        "candidates": [
+            _candidate_pool_entry(result, rank)
+            for rank, result in enumerate(top_candidates, start=1)
+        ],
+    }
+
+
+def _candidate_pool_entry(result, rank):
+    return {
+        "rank": rank,
+        "symbol": result.symbol,
+        "exchange": result.exchange,
+        "name": result.name,
+        "asset_type": result.asset_type,
+        "score": result.score,
+        "reason": result.reason,
+        "metrics": result.metrics,
+    }
+
+
+def _push_candidate_pool(pool):
+    try:
+        result = push_candidate_pool(pool)
+    except Exception as error:
+        print(f"[CANDIDATE_POOL_PUSH_FAILED] {error}")
+        return
+    if result.get("pushed"):
+        print(f"[CANDIDATE_POOL_PUSHED] {result['pool_path']}")
+    else:
+        print(f"[CANDIDATE_POOL_NOT_PUSHED] {result.get('reason')}")
+
+
+def _candidate_pool_status(pool):
+    if not isinstance(pool, dict) or not pool:
+        return {"action": "NO_BUY", "valid": False, "reason": "candidate pool is missing"}
+    candidates = pool.get("candidates") or []
+    if not candidates:
+        return {"action": "NO_BUY", "valid": False, "reason": "candidate pool has no candidates"}
+
+    updated_at = _parse_datetime(pool.get("updated_at"))
+    if updated_at is None:
+        return {"action": "NO_BUY", "valid": False, "reason": "candidate pool updated_at is invalid"}
+
+    now = datetime.now(timezone.utc)
+    age_minutes = (now - updated_at).total_seconds() / 60
+    if age_minutes > config.CANDIDATE_POOL_TTL_MINUTES:
+        return {
+            "action": "NO_BUY",
+            "valid": False,
+            "reason": (
+                "candidate pool is expired "
+                f"(age={age_minutes:.1f}m, ttl={config.CANDIDATE_POOL_TTL_MINUTES}m)"
+            ),
+            "age_minutes": round(age_minutes, 1),
+            "ttl_minutes": config.CANDIDATE_POOL_TTL_MINUTES,
+        }
+    return {
+        "action": "USE_CANDIDATE_POOL",
+        "valid": True,
+        "reason": "candidate pool is fresh",
+        "age_minutes": round(age_minutes, 1),
+        "ttl_minutes": config.CANDIDATE_POOL_TTL_MINUTES,
+        "candidate_count": len(candidates),
+    }
+
+
+def _parse_datetime(value):
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _revalidate_candidate_pool(client, candidate_pool, held_symbols, market):
+    results = []
+    qqq_metrics = {
+        "current_price": market["current_price"],
+        "ma20": market["ma20"],
+        "ma60": market["ma60"],
+    }
+    for entry in (candidate_pool.get("candidates") or [])[: config.CANDIDATE_POOL_TOP_N]:
+        item = {
+            "symbol": entry.get("symbol"),
+            "exchange": entry.get("exchange", "NASD"),
+            "name": entry.get("name", ""),
+            "asset_type": entry.get("asset_type", "STOCK"),
+        }
+        symbol = item["symbol"]
+        if not symbol:
+            continue
+        try:
+            prices = client.get_daily_prices(symbol, exchange=item["exchange"], days=260)
+            current_price = client.get_current_price(symbol, exchange=item["exchange"])
+            result = evaluate_buy_candidate(
+                item,
+                prices,
+                current_price,
+                held_symbols,
+                benchmark_metrics=qqq_metrics,
+            )
+        except Exception as error:
+            result = ScanResult(
+                symbol=symbol,
+                exchange=item["exchange"],
+                name=item["name"],
+                asset_type=item["asset_type"],
+                passed=False,
+                reason=f"error: {error}",
+            )
+        results.append(result)
+    return results
+
+
+def _run_buy_loop(
+    client,
+    ranked_candidates,
+    usd_cash,
+    total_asset_usd,
+    positions,
+    state,
+    market,
+    logs,
+    scan_results,
+    enable_fallback,
+):
+    buy_count = 0
+    max_buy_count = _max_buy_count_for_market(market["state"])
+    cash_remaining = usd_cash
+    sizing_total_asset_usd = _sizing_total_asset_usd(total_asset_usd, cash_remaining)
+    max_positions = _max_positions_for_account(sizing_total_asset_usd)
+    positions_count = len(positions)
+    qqq_metrics = {
+        "current_price": market["current_price"],
+        "ma20": market["ma20"],
+        "ma60": market["ma60"],
+    }
+    rejected_buy_candidates = []
+
+    print(f"[6/9] sizing_total_asset_usd={sizing_total_asset_usd:.2f}")
+    print(f"[6/9] max_positions_for_account={max_positions}")
+
+    while buy_count < max_buy_count and positions_count < max_positions:
+        selected, decision = _choose_affordable_candidate(
+            client,
+            ranked_candidates,
+            cash_remaining,
+            sizing_total_asset_usd,
+            positions,
+            state,
+            qqq_metrics,
+            market["state"],
+            rejected_buy_candidates,
+        )
+
+        if selected is None:
+            break
+
+        print(
+            f"[8/9] Selected buy candidate: {selected.symbol} "
+            f"score={selected.score} price={selected.metrics.get('current_price')}"
+        )
+        decision = decision or _build_buy_decision(selected, cash_remaining, sizing_total_asset_usd, positions, state)
+        decision = _execute_buy_decision(client, selected, decision, state, positions)
+        logs.append(_log_row("BUY_CHECK", selected.symbol, result=selected, decision=decision))
+        print(f"[8/9] buy_decision {selected.symbol}: {decision['action']} ({decision['reason']})")
+        if _counts_toward_buy_limit(decision):
+            buy_count += 1
+            positions_count += 1
+            cash_remaining -= decision.get("amount", 0)
+        ranked_candidates = [candidate for candidate in ranked_candidates if candidate.symbol != selected.symbol]
+
+    if ranked_candidates:
+        limit_reason = _remaining_candidate_limit_reason(buy_count, max_buy_count, positions_count, max_positions)
+        if limit_reason:
+            for candidate in ranked_candidates:
+                rejected_buy_candidates.append(
+                    (
+                        candidate,
+                        {
+                            "action": "NO_BUY",
+                            "reason": limit_reason,
+                            "price": candidate.metrics.get("current_price"),
+                            "score": candidate.score,
+                        },
+                    )
+                )
+
+    if buy_count == 0 and enable_fallback and config.ENABLE_QQQ_FALLBACK:
+        print("[7/9] No stock candidate passed. Checking QQQ fallback...")
+        fallback = evaluate_qqq_fallback(client)
+        if not fallback.passed:
+            print(f"[7/9] QQQ fallback rejected: {fallback.reason}")
+        else:
+            selected, decision = _choose_affordable_candidate(
+                client,
+                [fallback],
+                cash_remaining,
+                sizing_total_asset_usd,
+                positions,
+                state,
+                qqq_metrics,
+                market["state"],
+                rejected_buy_candidates,
+            )
+            if selected:
+                decision = _execute_buy_decision(client, selected, decision, state, positions)
+                logs.append(_log_row("BUY_CHECK", selected.symbol, result=selected, decision=decision))
+                print(f"[8/9] buy_decision {selected.symbol}: {decision['action']} ({decision['reason']})")
+                if _counts_toward_buy_limit(decision):
+                    buy_count += 1
+    elif buy_count == 0 and enable_fallback:
+        print("[7/9] QQQ fallback disabled")
+
+    if buy_count == 0:
+        print("[8/9] No buy order: no candidate")
+        logs.append(_log_row("BUY_CHECK", "", decision={"action": "NO_BUY", "reason": "no candidate"}))
+    for candidate, decision in rejected_buy_candidates:
+        logs.append(_log_row("BUY_CANDIDATE_REJECTED", candidate.symbol, result=candidate, decision=decision))
+    return buy_count
 
 
 def _handle_sell_decision(client, position, state):

@@ -20,6 +20,8 @@ on:
           - cancel-open-orders
           - portfolio-snapshot
           - score-only
+          - scan-candidates
+          - trade-from-candidates
           - full
 
 jobs:
@@ -99,6 +101,8 @@ jobs:
       MIN_WEAK_MARKET_RELATIVE_STRENGTH_SCORE: ${{ vars.MIN_WEAK_MARKET_RELATIVE_STRENGTH_SCORE || '85' }}
       MIN_RELATIVE_STRENGTH_EDGE_PERCENT: ${{ vars.MIN_RELATIVE_STRENGTH_EDGE_PERCENT || '2.0' }}
       REQUIRE_WEAK_MARKET_RELATIVE_STRENGTH: ${{ vars.REQUIRE_WEAK_MARKET_RELATIVE_STRENGTH || 'false' }}
+      CANDIDATE_POOL_TOP_N: ${{ vars.CANDIDATE_POOL_TOP_N || '20' }}
+      CANDIDATE_POOL_TTL_MINUTES: ${{ vars.CANDIDATE_POOL_TTL_MINUTES || '180' }}
       MAX_DAILY_LOSS_RATE: ${{ vars.MAX_DAILY_LOSS_RATE || '-3.0' }}
       MIN_ORDER_AMOUNT_USD: ${{ vars.MIN_ORDER_AMOUNT_USD || '50' }}
       SIZING_TOTAL_ASSET_USD: ${{ vars.SIZING_TOTAL_ASSET_USD || '' }}

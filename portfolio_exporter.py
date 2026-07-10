@@ -278,6 +278,35 @@ def push_decision_log(decision_log, log_id):
     }
 
 
+def push_candidate_pool(candidate_pool):
+    repo_dir = Path(config.PORTFOLIO_DATA_DIR)
+    _ensure_repo(repo_dir)
+
+    pool_path = repo_dir / "candidate_pool.json"
+    _write_json(pool_path, candidate_pool)
+    _git(repo_dir, "add", "candidate_pool.json")
+    if not _has_staged_changes(repo_dir):
+        return {"pushed": False, "reason": "no candidate pool changes"}
+
+    _git(repo_dir, "commit", "-m", "Update candidate pool")
+    _git(repo_dir, "push", "-u", "origin", "HEAD")
+    return {"pushed": True, "pool_path": str(pool_path)}
+
+
+def load_candidate_pool():
+    repo_dir = Path(config.PORTFOLIO_DATA_DIR)
+    pool_path = repo_dir / "candidate_pool.json"
+    try:
+        _ensure_repo(repo_dir)
+        if not pool_path.exists():
+            return {}
+        with pool_path.open("r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception as error:
+        print(f"[CANDIDATE_POOL_LOAD_FAILED] {error}")
+        return {}
+
+
 def _public_trader_state(state):
     public_state = dict(state)
     public_state.pop("token", None)
