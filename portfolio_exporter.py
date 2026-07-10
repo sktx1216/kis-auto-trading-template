@@ -196,6 +196,8 @@ def push_portfolio_snapshot(snapshot, trade_event=None):
     dashboard_path = repo_dir / "portfolio_dashboard.json"
     cash_flows_path = repo_dir / "cash_flows.json"
     previous_dashboard = _read_json(dashboard_path)
+    trader_state = _read_json(repo_dir / "trader_state.json")
+    snapshot = _apply_unsettled_sell_proceeds(snapshot, previous_dashboard, trader_state)
     stored_cash_flows = _read_json(cash_flows_path)
     cash_flows = _cash_flows(
         previous_dashboard=previous_dashboard,
@@ -280,6 +282,118 @@ def _public_trader_state(state):
     public_state = dict(state)
     public_state.pop("token", None)
     return public_state
+
+
+def _apply_unsettled_sell_proceeds(snapshot, previous_dashboard=None, trader_state=None):
+    pending_usd = _estimated_unsettled_sell_proceeds_usd(snapshot, previous_dashboard, trader_state)
+    if pending_usd <= 0:
+        return snapshot
+
+    adjusted = dict(snapshot)
+    account = dict(adjusted.get("account") or {})
+    settled_cash = float(account.get("cash_asset_usd") or 0)
+    stock_asset = float(account.get("stock_asset_usd") or 0)
+    cash_asset = round(settled_cash + pending_usd, 2)
+    account["settled_cash_asset_usd"] = round(settled_cash, 2)
+    account["unsettled_sell_proceeds_usd"] = round(pending_usd, 2)
+    account["cash_asset_usd"] = cash_asset
+    account["total_asset_usd"] = round(cash_asset + stock_asset, 2)
+    adjusted["account"] = account
+    adjusted["snapshot_note"] = (
+        "Last account balance snapshot. Not real-time market data. "
+        "Cash may include estimated unsettled sell proceeds."
+    )
+
+    total_asset = account["total_asset_usd"]
+    positions = []
+    for position in adjusted.get("positions", []) or []:
+        current_value = position.get("total_current_value") or 0
+        updated_position = dict(position)
+        updated_position["portfolio_weight_percent"] = round(_percent(current_value, total_asset), 2)
+        positions.append(updated_position)
+    adjusted["positions"] = positions
+    return adjusted
+
+
+def _estimated_unsettled_sell_proceeds_usd(snapshot, previous_dashboard=None, trader_state=None):
+    if not isinstance(trader_state, dict):
+        return 0.0
+
+    sell_total = _recent_sold_order_amount_usd(snapshot, trader_state)
+    if sell_total <= 0:
+        return 0.0
+
+    account = snapshot.get("account") or {}
+    settled_cash = float(account.get("cash_asset_usd") or 0)
+    exchange_rate = _extract_usd_krw_rate(snapshot) or 1.0
+    previous_cash = _previous_cash_asset_usd(previous_dashboard, exchange_rate)
+    if previous_cash is None:
+        return round(sell_total, 2)
+
+    missing_cash = (previous_cash + sell_total) - settled_cash
+    tolerance = max(5.0, sell_total * 0.1)
+    if missing_cash <= tolerance:
+        return 0.0
+    return round(min(sell_total, missing_cash), 2)
+
+
+def _recent_sold_order_amount_usd(snapshot, trader_state):
+    held_symbols = {
+        str(position.get("symbol", "")).upper()
+        for position in snapshot.get("positions", []) or []
+        if position.get("symbol")
+    }
+    snapshot_date = _date_key(snapshot.get("updated_at"))
+    orders_by_date = trader_state.get("orders_by_date") or {}
+    seen_orders = set()
+    total = 0.0
+
+    for order_date, day in orders_by_date.items():
+        if _date_distance_days(order_date, snapshot_date) is None:
+            continue
+        if _date_distance_days(order_date, snapshot_date) > 3:
+            continue
+        for order in day.get("orders", []) or []:
+            action = str(order.get("action") or "")
+            if not action.startswith("SELL"):
+                continue
+            symbol = str(order.get("symbol") or "").upper()
+            if not symbol or symbol in held_symbols:
+                continue
+            amount = _to_float(order.get("amount"))
+            if not amount:
+                continue
+            order_key = order.get("order_no") or f"{order_date}:{symbol}:{order.get('timestamp')}:{amount}"
+            if order_key in seen_orders:
+                continue
+            seen_orders.add(order_key)
+            total += amount
+    return round(total, 2)
+
+
+def _previous_cash_asset_usd(previous_dashboard, exchange_rate):
+    if not isinstance(previous_dashboard, dict) or not exchange_rate:
+        return None
+    rows = previous_dashboard.get("asset_history") or []
+    if not rows:
+        return None
+    previous = rows[-1]
+    cash_asset = _to_float(previous.get("cash_asset"))
+    if cash_asset is None:
+        return None
+    return cash_asset / exchange_rate
+
+
+def _date_distance_days(start, end):
+    try:
+        start_date = datetime.fromisoformat(str(start)[:10]).date()
+        end_date = datetime.fromisoformat(str(end)[:10]).date()
+    except ValueError:
+        return None
+    delta = (end_date - start_date).days
+    if delta < 0:
+        return None
+    return delta
 
 
 def should_push_for_decision(decision):
@@ -601,6 +715,15 @@ def _sector_allocation(portfolio_allocation, stock_asset):
 
 def _money_krw(value, exchange_rate):
     return round(float(value or 0) * exchange_rate)
+
+
+def _to_float(value):
+    if value is None or value == "":
+        return None
+    try:
+        return float(str(value).replace(",", ""))
+    except (TypeError, ValueError):
+        return None
 
 
 def _per_share(total_value, quantity):

@@ -820,6 +820,64 @@ class StrategyLogicTests(unittest.TestCase):
 
         self.assertEqual(dashboard["asset_history"][-1]["date"], "2026-07-02")
 
+    def test_unsettled_sell_proceeds_are_included_in_portfolio_snapshot_total(self):
+        snapshot = {
+            "updated_at": "2026-07-09T22:46:20+00:00",
+            "exchange_rate_usd_krw": 1500,
+            "snapshot_note": "Last account balance snapshot. Not real-time market data.",
+            "positions": [
+                {
+                    "symbol": "LIN",
+                    "quantity": 1,
+                    "total_current_value": 525.56,
+                    "portfolio_weight_percent": 83.43,
+                }
+            ],
+            "account": {
+                "cash_asset_usd": 104.41,
+                "stock_asset_usd": 525.56,
+                "total_asset_usd": 629.97,
+            },
+        }
+        previous_dashboard = {
+            "asset_history": [
+                {
+                    "date": "2026-07-09",
+                    "cash_asset": 159000,
+                    "stock_asset": 1_071_000,
+                    "total_asset": 1_230_000,
+                }
+            ]
+        }
+        trader_state = {
+            "orders_by_date": {
+                "2026-07-09": {
+                    "orders": [
+                        {
+                            "action": "SELL_ATTEMPT",
+                            "symbol": "BKNG",
+                            "qty": 1,
+                            "price": 172.62,
+                            "amount": 172.62,
+                            "order_no": "0031277560",
+                        }
+                    ]
+                }
+            }
+        }
+
+        adjusted = portfolio_exporter._apply_unsettled_sell_proceeds(
+            snapshot,
+            previous_dashboard,
+            trader_state,
+        )
+
+        self.assertEqual(adjusted["account"]["settled_cash_asset_usd"], 104.41)
+        self.assertEqual(adjusted["account"]["unsettled_sell_proceeds_usd"], 172.62)
+        self.assertEqual(adjusted["account"]["cash_asset_usd"], 277.03)
+        self.assertEqual(adjusted["account"]["total_asset_usd"], 802.59)
+        self.assertEqual(adjusted["positions"][0]["portfolio_weight_percent"], 65.48)
+
     def test_extract_open_orders_from_kis_response(self):
         data = {
             "output": [
