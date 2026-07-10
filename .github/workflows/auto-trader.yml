@@ -35,35 +35,9 @@ jobs:
       - id: mode
         shell: bash
         run: |
+          mode="${{ inputs.mode }}"
           should_run=true
           skip_reason=""
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            mode="${{ inputs.mode }}"
-          elif [ "${{ github.event.schedule }}" = "17 15 * * 1-5" ]; then
-            mode="full"
-          else
-            mode="sell-only"
-          fi
-
-          if [ "${{ github.event_name }}" = "schedule" ]; then
-            ny_hm=$(TZ=America/New_York date '+%H%M')
-            ny_minute=$(TZ=America/New_York date '+%M')
-
-            if [ "$mode" = "full" ]; then
-              if [ "$ny_hm" -lt 1105 ] || [ "$ny_hm" -gt 1135 ]; then
-                should_run=false
-                skip_reason="scheduled full run is stale or outside the 11:05-11:35 New York window"
-              fi
-            else
-              if [ "$ny_hm" -lt 0930 ] || [ "$ny_hm" -ge 1600 ]; then
-                should_run=false
-                skip_reason="scheduled sell-only run is outside US regular market hours"
-              elif [ "$ny_minute" -lt 25 ] || [ "$ny_minute" -gt 55 ]; then
-                should_run=false
-                skip_reason="scheduled sell-only run is stale; expected near minute 35"
-              fi
-            fi
-          fi
 
           echo "mode=$mode" >> "$GITHUB_OUTPUT"
           echo "should_run=$should_run" >> "$GITHUB_OUTPUT"
@@ -203,7 +177,6 @@ jobs:
       - name: Show workflow timing
         run: |
           echo "event_name=${{ github.event_name }}"
-          echo "event_schedule=${{ github.event.schedule }}"
           echo "selected_mode=${{ needs.decide-mode.outputs.mode }}"
           echo "utc_now=$(date -u '+%Y-%m-%d %H:%M:%S %Z')"
           echo "kst_now=$(TZ=Asia/Seoul date '+%Y-%m-%d %H:%M:%S %Z')"
