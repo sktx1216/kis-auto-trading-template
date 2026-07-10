@@ -43,6 +43,11 @@ function runAutoScheduler() {
     return;
   }
 
+  if (hhmm < 930 || hhmm >= 1700) {
+    console.log(`No action: outside automation window in New York (${marketDate} ${hhmm})`);
+    return;
+  }
+
   if (hhmm >= 930 && hhmm < 1100) {
     dispatchWorkflow_('sell-only');
     return;
